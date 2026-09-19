@@ -2,10 +2,10 @@
 @ Embedded Controller by Young-Keun Kim - Handong Global University
 Author           : Jisu Park
 Created          : 05-03-2021
-Modified         : 14-09-2026 
+Modified         : 19-09-2026 
 Language/ver     : C++ in VS Code
 
-Description      : Toggle multiple LEDs by Button B1 pressing
+Description      : LAB_GPIO_DIO_multiLED
 /----------------------------------------------------------------*/
 
 #include "stm32f4xx.h"

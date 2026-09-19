@@ -1,8 +1,8 @@
 /*----------------------------------------------------------------\
 @ Embedded Controller by Young-Keun Kim - Handong Global University
-Author           : [ YOUR NAME GOES HERE !!!!!]
+Author           : Jisu Park
 Created          : 05-03-2021
-Modified         : 00-00-2026 [WRITE THE DATE!!!!]
+Modified         : 19-09-2026
 Language/ver     : C++ in VS Code
 
 Description      : Tutorial Digital Out
