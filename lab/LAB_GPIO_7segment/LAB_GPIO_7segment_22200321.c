@@ -1,3 +1,13 @@
+/*----------------------------------------------------------------\
+@ Embedded Controller by Young-Keun Kim - Handong Global University
+Author           : Jisu Park
+Created          : 21-09-2021
+Modified         : 22-09-2026 
+Language/ver     : C++ in VS Code
+
+Description      : LAB_GPIO_7segment
+/----------------------------------------------------------------*/
+
 #include "stm32f4xx.h"
 #include "ecGPIO2.h"
 #include "ecRCC2.h"
