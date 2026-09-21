@@ -40,7 +40,7 @@ int main(void) {
 					currentLED = 0;
 				}
 
-				GPIO_write(LED_pin[currentLED], HIGH);    
+				GPIO_write(LED_pin[currentLED], HIGH);
 			}
 		}
 		buttonPrev = buttonNow;
