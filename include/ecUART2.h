@@ -1,11 +1,11 @@
 /*----------------------------------------------------------------\
 @ Embedded Controller by Young-Keun Kim - Handong Global University
-Author           : [ YOUR NAME GOES HERE !!!!!]
+Author           : Jisu Park
 Created          : 10-08-2025
-Modified         : 10-08-2026 
+Modified         : 19-10-2026 
 Language/ver     : C in VS Code
 
-Description      : USART2  library  [your description here] 
+Description      : USART2  library 
 /----------------------------------------------------------------*/
 
 #ifndef __EC_USART2_STUDENT_H

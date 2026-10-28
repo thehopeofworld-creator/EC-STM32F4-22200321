@@ -3,7 +3,7 @@
 @ Embedded Controller by Young-Keun Kim - Handong Global University
 Author           : Jisu Park
 Created          : 10-08-2026
-Modified         : 17-10-2026
+Modified         : 19-10-2026
 Language/ver     : C in VS Code
 
 Description      : USART2  library
