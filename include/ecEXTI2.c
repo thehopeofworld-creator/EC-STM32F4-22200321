@@ -3,7 +3,7 @@
 Author           : Jisu Park
 Created          : 05-03-2021
 Modified         : 30-09-2026
-Language/ver     : C++ in VS Code
+Language/ver     : C in VS Code
 
 Description      : Tutorial - External Interrupt (EXTI)
 /----------------------------------------------------------------*/
@@ -101,4 +101,12 @@ void clear_pending_EXTI(PinName_t pinName){
 
 	// clear by writing 1 to the pending bit
 	EXTI->PR  |= (1 << pin);     
+}
+
+void led_toggle(PinName_t pinName){
+	GPIO_TypeDef *Port;    
+	unsigned int pin;
+	ecPinmap(pinName,&Port,&pin);
+    
+    Port->ODR ^= (1UL << pin);
 }

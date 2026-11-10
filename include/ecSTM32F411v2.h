@@ -22,12 +22,14 @@ Description      : STM32F411 Library
 #include "ecGPIO2.h"
 #include "ecEXTI2.h"
 #include "ecSysTick2.h"
-//#include "ecTIM2.h"
-//#include "ecPWM2.h"
+#include "ecTIM2.h"
+#include "ecPWM2.h"
 #include "ecStepper2.h"
-//#include "ecADC2.h"
+#include "ecADC2.h"
 #include "ecUART2.h"
-
+#include "ecICAP2.h"
+#include "ecI2C2.h"
+#include "ecDHT11.h"
 
 static inline void MCU_init(void){
     // CLOCK PLL 84MHz
@@ -42,11 +44,11 @@ static inline void MCU_init(void){
  
     // LED PA5
     GPIO_init(PA_5, OUTPUT);
- 
+    
     // TIMx Default Initialization
-    // ...
+    
     // PWM Default Initialization
-    // ...
+    
     // USART Default Initialization
     // ...
     // Others

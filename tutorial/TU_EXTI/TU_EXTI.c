@@ -21,16 +21,6 @@ Description      : Tutorial - External Interrupt (EXTI)
 #define SW2_PIN    PA_4			//EVAL board JKIT SW2
 
 
-void led_toggle(PinName_t pinName){
-	GPIO_TypeDef *Port;    
-	unsigned int pin;
-	ecPinmap(pinName,&Port,&pin);
-    
-	// YOUR CODE GOES HERE - Use XOR 
-	// [YOUR CODE GOES HERE]
-    Port->ODR ^= (1UL << pin);
-}
-
 // Initialiization 
 void setup(void)
 {

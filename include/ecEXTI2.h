@@ -3,7 +3,7 @@
 Author           : Jisu Park
 Created          : 05-03-2021
 Modified         : 30-09-2026 [WRITE THE DATE!!!!]
-Language/ver     : C++ in VS Code
+Language/ver     : C in VS Code
 
 Description      : External Interrupt (EXTI) header file
 /----------------------------------------------------------------*/
@@ -27,6 +27,7 @@ void EXTI_enable(PinName_t pinName);
 void EXTI_disable(PinName_t pinName);
 uint32_t is_pending_EXTI(PinName_t pinName);
 void clear_pending_EXTI(PinName_t pinName);
+void led_toggle(PinName_t pinName);
 
 #ifdef __cplusplus
 }
