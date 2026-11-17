@@ -1,6 +1,6 @@
 /*----------------------------------------------------------------\
 @ Embedded Controller by Young-Keun Kim - Handong Global University
-Author           : JeYun Oh
+Author           : Jisu Park / JeYun Oh
 Created          : 05-03-2021
 Modified         : 02-11-2026
 Language/ver     : C++ in VS Code
@@ -32,19 +32,26 @@ Description      : Smart-Farm Management System (Full FSM: MANUAL / AUTO / ALARM
 #define BT_RX_PIN               PA_12  // USART6 RX (9600 Baud)
 
 // ---------- values to tune (read them from the serial output) ----------
-#define LIGHT_INVERT            1      // 1: 어두울수록 ADC 커짐 -> 반전하여 클수록 밝음
+#define LIGHT_INVERT            1      // 1: ADC gets larger when darker -> invert so that a larger value means brighter
 #define DARK_TH                 300    // light <= DARK_TH : duty 100%
 #define BRIGHT_TH               3800   // light >= BRIGHT_TH : duty 0%
-#define LIGHT_HYST              200    // 경계값 깜빡임 방지 히스테리시스
-#define LED_MIN_ON_TICKS        4      // 최소 점등 시간 (500ms * 4 = 2초)
+#define LIGHT_HYST              200    // hysteresis to stop flicker around the threshold
+#define LED_MIN_ON_TICKS        4      // minimum LED on-time (500 ms * 4 = 2 s)
 
 #define MOTOR_DIR               0      // 0 or 1 (automatically handled by compensation formula)
 #define PWM_PERIOD_US           1000   // 1 msec = 1 kHz
 
-// === Moisture 임계값 ===
-#define MOIST_INVERT            1      // 1: 물에 닿을수록 ADC 작아짐 -> 반전하여 클수록 습함
-#define MOIST_DRY_TH            1000   // 이 값 미만으로 5초 유지 시 DRY 알람 발생
-#define MOIST_RECOVER_TH        2500   // 이 값 초과로 5초 유지 시 DRY 알람 해제
+// === Moisture thresholds ===
+#define MOIST_INVERT            1      // 1: ADC gets smaller when wetter -> invert so that a larger value means wetter
+#define MOIST_DRY_TH            1000   // DRY alarm is raised when below this value for 5 s
+#define MOIST_RECOVER_TH        1500   // DRY alarm is cleared when above this value for 5 s
+
+// === Ventilation thresholds (ON limit > OFF limit = hysteresis) ===
+#define TEMP_HIGH               27     // vent ON when temperature is above this
+#define TEMP_LOW                27     // vent OFF only when temperature is below this AND humidity is also low
+#define HUM_HIGH                60     // vent ON when humidity is above this
+#define HUM_LOW                 55
+#define ALARM_REPEAT_TICKS      4      // BT "ADD WATER" repeat period (500 ms * 4 = 2 s)
 
 // === Window Angles ===
 #define WINDOW_OPEN_DEG         30
@@ -57,13 +64,13 @@ typedef enum {
    STATE_ALARM  = 2
 } FSM_State_t;
 
-volatile FSM_State_t selected_mode = STATE_MANUAL; // 전원 인가 시 기본 모드는 MANUAL
+volatile FSM_State_t selected_mode = STATE_MANUAL; // default mode at power-on is MANUAL
 FSM_State_t current_state = STATE_MANUAL;
 
-volatile uint8_t auto_delay_ticks = 5000;             // 버튼으로 AUTO 진입 시 5초(10틱) 대기
-volatile uint8_t tick_500ms = 0;                   // TIM1 500ms 주기 플래그
+volatile uint8_t auto_delay_ticks = 0;             // 5 s (10 ticks) wait after entering AUTO
+volatile uint8_t tick_500ms = 0;                   // TIM1 500 ms tick flag
 
-// Manual Mode Setpoints (전원 인가 시 LED OFF, Fan OFF, Window CLOSED)
+// Manual Mode Setpoints (power-on: LED OFF, Fan OFF, Window CLOSED)
 volatile float   manual_led_duty     = 0.0f;
 volatile uint8_t manual_fan_on       = 0;
 volatile int     manual_window_angle = WINDOW_CLOSE_DEG;
@@ -75,7 +82,6 @@ uint8_t led_active = 0;
 uint8_t led_on_ticks = 0;
 
 // Ventilation
-static volatile int window_direction = 1;
 static volatile int window_angle = WINDOW_CLOSE_DEG;
 uint8_t fan_is_on = 0;
 
@@ -83,18 +89,16 @@ uint32_t temp = 0;
 uint32_t hum  = 0;
 uint32_t dht_err_count = 0;
 uint8_t dht_fail_streak = 0;
-uint8_t dht_fault = 0;              // 1: DHT11 연속 오류 -> AUTO 모드에서 강제 환기
+uint8_t dht_fault = 0;              // 1: DHT11 consecutive errors -> forced ventilation in AUTO mode
 
 // Moisture
 volatile uint32_t moisture_ADCvalue = 0;
 uint32_t moist = 0;
-uint8_t alarm_dry = 0;              // 0: 정상, 1: ALARM(DRY) 활성
-uint8_t dry_cnt = 0;                // 500ms 루프 기준 10회 = 5초
+uint8_t alarm_dry = 0;              // 0: normal, 1: ALARM(DRY) active
+uint8_t dry_cnt = 0;                // counted in 500 ms ticks: 10 = 5 s
 uint8_t recover_cnt = 0;
-
-// Bluetooth Command Parser State
-volatile char bt_cmd_type = 0;
-volatile int  bt_cmd_val  = -1;
+volatile uint8_t alarm_ack = 0;     // 1: alarm acknowledged via BT -> only the repeated message stops (alarm stays)
+uint8_t alarm_msg_cnt = 0;
 
 // Function Prototypes
 void setup(void);
@@ -108,6 +112,7 @@ void update_Moisture(void);
 void update_LCD(void);
 void process_BT_char(uint8_t ch);
 void BT_send_str(const char *str);
+void notify_changes(void);
 
 void setup(void){
    RCC_PLL_init();                                 // System Clock = 84MHz
@@ -116,7 +121,7 @@ void setup(void){
 
    // Bluetooth USART6 init (PA_11 = TX, PA_12 = RX, 9600 baud)
    USART_init(USART6, BT_TX_PIN, BT_RX_PIN, BAUD_9600);
-   NVIC_SetPriority(USART6_IRQn, 1);               // ecUART2.c는 USART1/2 NVIC만 켜므로 직접 활성화
+   NVIC_SetPriority(USART6_IRQn, 1);               // ecUART2.c only enables the USART1/2 NVIC lines, so USART6 is enabled here
    NVIC_EnableIRQ(USART6_IRQn);
 
    // Push-Button B1 (PC_13, Active-Low) EXTI13 init
@@ -150,14 +155,14 @@ void setup(void){
    // DHT11 init on PA_6
    DHT11_init(DHT11_PIN);
 
-   // JADC 2채널 시퀀스 설정 (JDR1: 조도 PA_0, JDR2: 수분 PA_1, 125ms 주기)
+   // JADC 2-channel sequence (JDR1: light PA_0, JDR2: moisture PA_1, every 125 ms)
    PinName_t jadc_pins[2] = {LIGHT_SENSOR_PIN, MOISTURE_SENSOR_PIN};
    JADC_init(LIGHT_SENSOR_PIN);
    JADC_init(MOISTURE_SENSOR_PIN);
    JADC_sequence(jadc_pins, 2);
    JADC_trigger_init(TIM5, 125, ADC_RISE);
 
-   // TIM1 500ms 제어 루프 인터럽트 시작
+   // Start the TIM1 500 ms control-loop interrupt
    TIM_UI_init(TIM1, 500);
 }
 
@@ -165,7 +170,7 @@ int main(void){
    setup();
    uint8_t loop_cnt = 0;
 
-   // 시작 직후 초기 온습도 1회 측정
+   // Read temperature/humidity once right after start-up
    update_HumTemp();
 
    // Infinite Loop ----------------------------------------------------------
@@ -176,58 +181,65 @@ int main(void){
          uint32_t LED   = led_ADCvalue;
          uint32_t light = LIGHT_INVERT ? (4095 - LED) : LED;
 
-         // 1. 500 ms * 4 = 2초마다 1회 DHT11 측정
+         // 1. Read DHT11 once every 2 s (500 ms * 4)
          if (++loop_cnt >= 4) {
             loop_cnt = 0;
             update_HumTemp();
          }
 
-         // 2. 토양 수분 알람 상태 갱신 (5초 유지 판정)
+         // 2. Update soil-moisture alarm state (5 s hold check)
          update_Moisture();
 
-         // 3. FSM 상태 전이 및 액추에이터 출력 제어
+         // 3. FSM state transition and actuator outputs
          control_FSM(light);
 
-         // 4. I2C LCD 상태 업데이트
-         update_LCD();
-
-         // 5. 시리얼 디버깅 출력
+         // 3b. Serial debug output (before the LCD update, because the I2C LCD can block for seconds when it is missing)
          const char *st_str = (current_state == STATE_ALARM)  ? "ALARM " :
                               (current_state == STATE_AUTO)   ? "AUTO  " : "MANUAL";
-         printf("[%s] light=%4lu LED_duty=%3d%% hum=%2lu%% temp=%2luC moist=%4lu fan=%d win=%d delay=%d\r\n",
+         printf("[%s] light=%4lu LED_duty=%3d%% hum=%2lu%% temp=%2luC moist=%4lu fan=%d win=%d delay=%d dhtErr=%lu\r\n",
                 st_str, (unsigned long)light, (int)(led_duty * 100.0f + 0.5f),
                 (unsigned long)hum, (unsigned long)temp, (unsigned long)moist,
-                fan_is_on, window_angle, auto_delay_ticks);
+                fan_is_on, window_angle, auto_delay_ticks, (unsigned long)dht_err_count);
+
+         // 4. Update I2C LCD
+         update_LCD();
+
+         // 5. Send BT messages when a condition changed
+         notify_changes();
       }
    }
 }
 
 void control_FSM(uint32_t light){
-   // 1. 상태 결정: 토양 건조 알람이 최우선, 해제 시 이전 선택 모드(AUTO/MANUAL)로 복귀
+   // 1. Decide state: DRY alarm has top priority; when it clears, return to the selected mode (AUTO/MANUAL)
    if (alarm_dry) {
       current_state = STATE_ALARM;
    } else {
       current_state = selected_mode;
    }
 
-   // 2. 현재 상태별 동작 수행
+   // 2. Behaviour of the current state
    switch (current_state) {
       case STATE_AUTO:
 
-         // 푸시버튼으로 AUTO 진입 시 5초(10틱) 지연 후 조도 감지 시작
+         // When AUTO is entered, wait 5 s (10 ticks) before the light sensing starts
          if (auto_delay_ticks > 0) {
             auto_delay_ticks--;
             led_active = 0;
             led_on_ticks = 0;
             led_duty = 0.0f;
          } else {
+            float prev_duty = led_duty;
             update_Lighting(light);
+            led_duty = prev_duty + (led_duty - prev_duty) * 0.25f;   // smooth the duty (stops the LED light from feeding back into the sensor and flickering)
+            if (led_duty < 0.02f) led_duty = 0.0f;
+            if (led_duty > 0.98f) led_duty = 1.0f;
          }
 
-         // 자동 환기 (온습도 히스테리시스 + DHT11 오류 시 강제 환기)
+         // Automatic ventilation (T/H hysteresis + forced ventilation on DHT11 fault)
          control_Ventilation_Auto();
 
-         // LED PWM 출력
+         // LED PWM output
          GPIO_mode(LED_PWM_PIN, AF);
          PWM_duty(LED_PWM_PIN, led_duty);
          break;
@@ -237,7 +249,7 @@ void control_FSM(uint32_t light){
          led_active = 0;
          led_on_ticks = 0;
 
-         // 블루투스 수동 명령값 적용
+         // Apply the manual values set by Bluetooth
          led_duty = manual_led_duty;
          GPIO_mode(LED_PWM_PIN, AF);
          PWM_duty(LED_PWM_PIN, led_duty);
@@ -246,11 +258,11 @@ void control_FSM(uint32_t light){
          break;
 
       case STATE_ALARM:
-         // 토양 건조 경보: LED 1초 주기(500ms마다 반전) 점멸
+         // Soil-dry alarm: LED blinks with a 1 s period (toggle every 500 ms)
          GPIO_mode(LED_PWM_PIN, OUTPUT);
          led_toggle(LED_PWM_PIN);
 
-         // 환기는 선택된 모드 기준 유지
+         // Ventilation follows the selected mode
          if (selected_mode == STATE_AUTO) {
             control_Ventilation_Auto();
          } else {
@@ -297,10 +309,10 @@ void update_HumTemp(void){
       hum  = DHT11_humidity();
       dht_fail_streak = 0;
       dht_fault = 0;
-   } else {
+   } else if (status != DHT11_ERR_TOOSOON) {        // TOOSOON (read too early) is not a sensor error, so it is not counted
       dht_err_count++;
-      if (++dht_fail_streak >= 2) {
-         dht_fault = 1;                            // 연속 실패 시 강제 환기 플래그 활성화
+      if (++dht_fail_streak >= 3) {
+         dht_fault = 1;                            // consecutive failures -> set the forced-ventilation flag
       }
    }
 }
@@ -318,7 +330,6 @@ void control_window(int deg){
 void apply_Ventilation_Outputs(uint8_t fan_on, int angle){
    fan_is_on = fan_on ? 1 : 0;
    window_angle = angle;
-   window_direction = (angle <= 45) ? -1 : 1;
 
    float targetPWM = fan_is_on ? 1.0f : 0.0f;
    float fan_duty = fabsf((float)MOTOR_DIR - targetPWM);
@@ -331,11 +342,11 @@ void control_Ventilation_Auto(void){
    static uint8_t auto_fan_state = 0;
    static int     auto_win_angle = WINDOW_CLOSE_DEG;
 
-   // DHT11 오류 상태이거나 온습도 상한 초과 시 팬 ON + 창문 OPEN
-   if (dht_fault || temp > 26 || hum > 70) {
+   // On DHT11 fault or T/H above the upper limit: fan ON + window OPEN
+   if (dht_fault || temp > TEMP_HIGH || hum > HUM_HIGH) {
       auto_fan_state = 1;
       auto_win_angle = WINDOW_OPEN_DEG;
-   } else if (temp <= 28 && hum < 60) {
+   } else if (temp <= TEMP_LOW && hum <= HUM_LOW) {
       auto_fan_state = 0;
       auto_win_angle = WINDOW_CLOSE_DEG;
    }
@@ -351,6 +362,7 @@ void update_Moisture(void) {
       if (moist < MOIST_DRY_TH) {
          if (++dry_cnt >= 10) {
             alarm_dry = 1;
+            alarm_ack = 0;                         // a new alarm starts as not acknowledged
             dry_cnt = 0;
          }
       } else {
@@ -360,6 +372,7 @@ void update_Moisture(void) {
       if (moist > MOIST_RECOVER_TH) {
          if (++recover_cnt >= 10) {
             alarm_dry = 0;
+            alarm_ack = 0;
             recover_cnt = 0;
          }
       } else {
@@ -371,15 +384,15 @@ void update_Moisture(void) {
 void update_LCD(void){
    char line0[17];
    char line1[17];
-   static uint8_t alarm_blink = 0;                 // 500ms마다 반전 -> 1초 주기 점멸
+   static uint8_t alarm_blink = 0;                 // toggled every 500 ms -> 1 s blink period
 
    int duty_pct = (int)(led_duty * 100.0f + 0.5f);
 
    if (current_state == STATE_ALARM) {
-      // State = ALARM : 1행 "ALARM", 2행 "ADD WATER" 1초 주기 점멸
-      snprintf(line0, sizeof(line0), "ALARM           ");
+      // State = ALARM : line 1 "ALARM", line 2 "ADD WATER" blinking with a 1 s period
+      snprintf(line0, sizeof(line0), alarm_ack ? "ALARM (ACK)     " : "ALARM           ");
       alarm_blink ^= 1;
-      if (alarm_blink) {
+      if (alarm_ack || alarm_blink) {
          snprintf(line1, sizeof(line1), "ADD WATER       ");
       } else {
          snprintf(line1, sizeof(line1), "                ");
@@ -424,106 +437,118 @@ void BT_send_str(const char *str){
    }
 }
 
-// Bluetooth 수신 문자 처리 (단일 문자 명령 'A','M','L','l','F','f','W','w' 및 숫자 명령 'L70','W30' 지원)
+// Handle one received Bluetooth character (single-char commands 'A','M','L','l','F','f','W','w','K')
 void process_BT_char(uint8_t ch){
-   // 줄바꿈(\r, \n) 수신 시 누적된 숫자 인자 확정 (예: "L70\n", "W30\n")
-   if (ch == '\r' || ch == '\n') {
-      if (bt_cmd_type != 0 && bt_cmd_val >= 0) {
-         if (selected_mode == STATE_MANUAL) {
-            if (bt_cmd_type == 'L' || bt_cmd_type == 'l') {
-               int pct = (bt_cmd_val > 100) ? 100 : bt_cmd_val;
-               manual_led_duty = (float)pct / 100.0f;
-            } else if (bt_cmd_type == 'F' || bt_cmd_type == 'f') {
-               manual_fan_on = (bt_cmd_val > 0) ? 1 : 0;
-            } else if (bt_cmd_type == 'W' || bt_cmd_type == 'w') {
-               int ang = (bt_cmd_val > 180) ? 180 : bt_cmd_val;
-               manual_window_angle = ang;
-            }
-         }
-      }
-      bt_cmd_type = 0;
-      bt_cmd_val  = -1;
-      return;
-   }
-
-   // 숫자 입력 중이면 값 누적
-   if (ch >= '0' && ch <= '9') {
-      if (bt_cmd_type != 0) {
-         if (bt_cmd_val < 0) bt_cmd_val = 0;
-         bt_cmd_val = bt_cmd_val * 10 + (ch - '0');
-      }
-      return;
-   }
-
-   // 새 명령 문자 시작
-   bt_cmd_type = (char)ch;
-   bt_cmd_val  = -1;
-
-   switch (ch) { 
+   switch (ch) {
       case 'A':
       case 'a':
          selected_mode = STATE_AUTO;
-         auto_delay_ticks = 0;                     // BT로 AUTO 선택 시 즉시 시작
+         auto_delay_ticks = 10;                    // AUTO selected via BT also waits 5 s before the light sensing starts
          led_active = 0;
          led_on_ticks = 0;
-         BT_send_str("MODE: AUTO\r\n");
-         break;
+         break;                                    // MODE message is sent from notify_changes()
 
       case 'M':
       case 'm':
          selected_mode = STATE_MANUAL;
          auto_delay_ticks = 0;
-         BT_send_str("MODE: MANUAL\r\n");
          break;
 
       case 'L':
          if (selected_mode == STATE_MANUAL) {
-            manual_led_duty = 1.0f;                // 'L' 단독 전송 시 LED 100% ON
+            manual_led_duty = 1.0f;                // a lone 'L' turns the LED on at 100%
             BT_send_str("LED: ON\r\n");
          }
          break;
 
       case 'l':
          if (selected_mode == STATE_MANUAL) {
-            manual_led_duty = 0.0f;                // 'l' 단독 전송 시 LED OFF
+            manual_led_duty = 0.0f;                // a lone 'l' turns the LED off
             BT_send_str("LED: OFF\r\n");
          }
          break;
 
       case 'F':
          if (selected_mode == STATE_MANUAL) {
-            manual_fan_on = 1;                     // 'F' 전송 시 Fan ON
+            manual_fan_on = 1;                     // 'F' turns the fan ON
             BT_send_str("FAN: ON\r\n");
          }
          break;
 
       case 'f':
          if (selected_mode == STATE_MANUAL) {
-            manual_fan_on = 0;                     // 'f' 전송 시 Fan OFF
+            manual_fan_on = 0;                     // 'f' turns the fan OFF
             BT_send_str("FAN: OFF\r\n");
          }
          break;
 
       case 'W':
-      case 'O':
-      case 'o':
          if (selected_mode == STATE_MANUAL) {
-            manual_window_angle = WINDOW_OPEN_DEG; // 'W' 또는 'O' 전송 시 창문 OPEN
+            manual_window_angle = WINDOW_OPEN_DEG; // 'W' opens the window
             BT_send_str("WIN: OPEN\r\n");
          }
          break;
 
       case 'w':
-      case 'C':
-      case 'c':
          if (selected_mode == STATE_MANUAL) {
-            manual_window_angle = WINDOW_CLOSE_DEG;// 'w' 또는 'C' 전송 시 창문 CLOSED
+            manual_window_angle = WINDOW_CLOSE_DEG;// 'w' closes the window
             BT_send_str("WIN: CLOSE\r\n");
+         }
+         break;
+
+      case 'K':
+      case 'k':                                    // acknowledge the alarm: only the repeated ADD WATER message stops
+         if (alarm_dry && !alarm_ack) {
+            alarm_ack = 1;
+            BT_send_str("ALARM ACK: repeat stopped\r\n");
+         } else {
+            BT_send_str("ACK: no active alarm\r\n");
          }
          break;
 
       default:
          break;
+   }
+}
+
+// Send a BT message whenever a condition changes (called from the main loop every 500 ms)
+void notify_changes(void){
+   static FSM_State_t prev_mode = STATE_MANUAL;
+   static uint8_t prev_alarm = 0, prev_fault = 0, prev_fan = 0, prev_led_on = 0;
+
+   if (selected_mode != prev_mode) {
+      prev_mode = selected_mode;
+      if (selected_mode == STATE_AUTO) BT_send_str("MODE: AUTO (light control starts in 5 s)\r\n");
+      else                             BT_send_str("MODE: MANUAL\r\n");
+   }
+
+   if (alarm_dry != prev_alarm) {
+      prev_alarm = alarm_dry;
+      if (alarm_dry) { BT_send_str("ALARM: ADD WATER\r\n"); alarm_msg_cnt = 0; }
+      else           { BT_send_str("ALARM CLEARED: soil moisture recovered\r\n"); }
+   } else if (alarm_dry && !alarm_ack) {           // repeat until acknowledged (K)
+      if (++alarm_msg_cnt >= ALARM_REPEAT_TICKS) {
+         alarm_msg_cnt = 0;
+         BT_send_str("ALARM: ADD WATER\r\n");
+      }
+   }
+
+   if (dht_fault != prev_fault) {
+      prev_fault = dht_fault;
+      BT_send_str(dht_fault ? "DHT11 FAULT: invalid readings\r\n" : "DHT11 OK: valid reading again\r\n");
+   }
+
+   if (fan_is_on != prev_fan) {                    // automatic ventilation changes only (MANUAL is reported by the command reply)
+      prev_fan = fan_is_on;
+      if (selected_mode == STATE_AUTO)
+         BT_send_str(fan_is_on ? "VENT: ON (fan on, window open)\r\n" : "VENT: OFF (fan off, window closed)\r\n");
+   }
+
+   uint8_t led_on = (led_duty > 0.0f);
+   if (led_on != prev_led_on) {
+      prev_led_on = led_on;
+      if (current_state == STATE_AUTO)
+         BT_send_str(led_on ? "LED: ON (AUTO)\r\n" : "LED: OFF (AUTO)\r\n");
    }
 }
 
@@ -540,13 +565,13 @@ void EXTI15_10_IRQHandler(void){
    static uint32_t last_btn_tick = 0;
 
    if (is_pending_EXTI(BUTTON_PIN)) {
-      // 200ms 소프트웨어 디바운싱
+      // 200 ms software debounce
       if ((msTicks - last_btn_tick) >= 200) {
          last_btn_tick = msTicks;
 
          if (selected_mode == STATE_MANUAL) {
             selected_mode = STATE_AUTO;
-            auto_delay_ticks = 10;                 // 푸시버튼으로 AUTO 진입 시 5초 지연 시작
+            auto_delay_ticks = 10;                 // 5 s delay starts when AUTO is entered with the push-button
             led_active = 0;
             led_on_ticks = 0;
          } else {
