@@ -50,7 +50,7 @@ void DHT11_init(PinName_t pinName){
 	_pin = pinName;
 
 	GPIO_init(_pin, INPUT);
-	GPIO_pupd(_pin, EC_PU);				// idle high between transactions
+	GPIO_pupd(_pin, PULL_UP);				// idle high between transactions
 
 	_everRead = 0;
 }
@@ -69,7 +69,7 @@ int DHT11_read(void){
 // 1. Start pulse : hold the line low for at least 18 ms. This is a minimum,
 //    so interrupts stay enabled and delay_ms() may be used.
 	GPIO_init(_pin, OUTPUT);
-	GPIO_otype(_pin, EC_PUSH_PULL);
+	GPIO_otype(_pin, PUSH_PULL);
 	GPIO_write(_pin, LOW);
 	delay_ms(DHT11_START_MS);
 
@@ -80,7 +80,7 @@ int DHT11_read(void){
 	__disable_irq();
 
 	GPIO_init(_pin, INPUT);
-	GPIO_pupd(_pin, EC_PU);
+	GPIO_pupd(_pin, PULL_UP);
 
 	// The sensor answers with 80 us low, then 80 us high, then the first bit
 	if(wait_level(LOW,  DHT11_EDGE_US) ||

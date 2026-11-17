@@ -2,7 +2,7 @@
 @ Embedded Controller by Young-Keun Kim - Handong Global University
 Author           : Jisu Park
 Created          : 05-03-2021
-Modified         : 01-10-2026
+Modified         : 11-05-2026
 Language/ver     : C++ in VS Code
 
 Description      : STM32F411 Library
