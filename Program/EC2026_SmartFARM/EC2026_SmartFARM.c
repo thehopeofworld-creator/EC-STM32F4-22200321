@@ -2,7 +2,7 @@
 @ Embedded Controller by Young-Keun Kim - Handong Global University
 Author           : Jisu Park / JeYun Oh
 Created          : 05-03-2021
-Modified         : 02-11-2026
+Modified         : 18-11-2026
 Language/ver     : C++ in VS Code
 Description      : Smart-Farm Management System (Full FSM: MANUAL / AUTO / ALARM)
 /----------------------------------------------------------------*/
